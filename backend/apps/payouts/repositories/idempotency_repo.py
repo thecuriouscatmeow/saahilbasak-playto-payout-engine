@@ -38,10 +38,11 @@ def update_with_response(
     response_status_code: int,
     response_body: dict,
 ) -> None:
+    stored_body = {"_status": response_status_code, **response_body}
     IdempotencyRecord.objects.filter(id=record_id).update(
         payout_id=payout_id,
         state=IdempotencyState.COMPLETED,
-        response_body=response_body,
+        response_body=stored_body,
     )
 
 
