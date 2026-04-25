@@ -51,3 +51,48 @@ def test_balance_zero_for_new_merchant(merchant):
     assert result.available_paise == 0
     assert result.held_paise == 0
     assert result.total_credits_paise == 0
+
+
+from apps.payouts.repositories import transaction_repo
+
+
+def test_insert_credit_updates_balance(merchant):
+    transaction_repo.insert_credit(str(merchant.id), 10_000)
+    result = get_balance_breakdown(str(merchant.id))
+    assert result.available_paise == 10_000
+    assert result.total_credits_paise == 10_000
+
+
+def test_insert_hold_reduces_available(merchant, bank_account):
+    transaction_repo.insert_credit(str(merchant.id), 50_000)
+    payout = Payout.objects.create(
+        merchant=merchant, bank_account=bank_account, amount_paise=20_000, status=PayoutStatus.PROCESSING
+    )
+    transaction_repo.insert_hold(payout, 20_000)
+    result = get_balance_breakdown(str(merchant.id))
+    assert result.available_paise == 30_000
+    assert result.held_paise == 20_000
+
+
+def test_insert_release_restores_available(merchant, bank_account):
+    transaction_repo.insert_credit(str(merchant.id), 50_000)
+    payout = Payout.objects.create(
+        merchant=merchant, bank_account=bank_account, amount_paise=20_000, status=PayoutStatus.PROCESSING
+    )
+    transaction_repo.insert_hold(payout, 20_000)
+    transaction_repo.insert_release(payout, 20_000)
+    result = get_balance_breakdown(str(merchant.id))
+    assert result.available_paise == 50_000
+    assert result.held_paise == 0
+
+
+def test_insert_debit_settles_hold(merchant, bank_account):
+    transaction_repo.insert_credit(str(merchant.id), 50_000)
+    payout = Payout.objects.create(
+        merchant=merchant, bank_account=bank_account, amount_paise=20_000, status=PayoutStatus.PROCESSING
+    )
+    transaction_repo.insert_hold(payout, 20_000)
+    transaction_repo.insert_debit(payout, 20_000)
+    result = get_balance_breakdown(str(merchant.id))
+    assert result.available_paise == 10_000
+    assert result.held_paise == 0
