@@ -67,4 +67,5 @@ def test_update_with_response(merchant):
     from apps.payouts.domain.enums import IdempotencyState
     updated = IdempotencyRecord.objects.get(id=record.id)
     assert updated.state == IdempotencyState.COMPLETED
-    assert updated.response_body == {"id": "some-payout-id"}
+    assert updated.response_body["id"] == "some-payout-id"
+    assert updated.response_body["_status"] == 201
