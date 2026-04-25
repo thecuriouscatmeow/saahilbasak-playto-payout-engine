@@ -4,6 +4,8 @@ from apps.payouts.models import Payout
 from apps.payouts.domain.enums import PayoutStatus
 from apps.payouts.repositories import payout_repo, transaction_repo
 from apps.payouts.services.process_payout import simulate_bank_settlement
+import structlog
+log = structlog.get_logger()
 
 MAX_ATTEMPTS = 3
 
@@ -24,6 +26,7 @@ class RetryStalePayoutsService:
         return processed
 
     def _handle_stale(self, payout_id: str, attempts: int) -> None:
+        log.info("payout.retry_scheduled", payout_id=payout_id, attempts=attempts)
         if attempts >= MAX_ATTEMPTS:
             payout = Payout.objects.get(id=payout_id)
             payout_repo.transition(
@@ -33,6 +36,7 @@ class RetryStalePayoutsService:
                 on_apply=lambda: transaction_repo.insert_release(payout, payout.amount_paise),
                 reason="max_attempts_exceeded",
             )
+            log.warning("payout.max_attempts_exceeded", payout_id=payout_id)
             return
 
         # Inline retry: bump attempt counter + last_attempted_at, then simulate
