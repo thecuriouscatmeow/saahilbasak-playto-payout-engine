@@ -1,0 +1,29 @@
+[project]
+name = "playto-backend"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = [
+    "Django>=5.0,<6",
+    "djangorestframework",
+    "psycopg[binary]>=3.1",
+    "celery[redis]",
+    "structlog",
+    "django-cors-headers",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest",
+    "pytest-django",
+    "factory-boy",
+    "ruff",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.pytest.ini_options]
+DJANGO_SETTINGS_MODULE = "config.settings.test"
+python_files = ["test_*.py"]
+addopts = "--tb=short"
