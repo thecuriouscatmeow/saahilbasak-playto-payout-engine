@@ -10,4 +10,5 @@ urlpatterns = [
     path("health/", health),
     path("api/v1/merchants/", include("apps.merchants.api.urls")),
     path("api/v1/merchants/", include("apps.payouts.api.urls")),
+    path("api/v1/payouts/", include("apps.payouts.api.payout_urls")),
 ]

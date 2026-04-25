@@ -18,3 +18,14 @@ class PayoutSerializer(serializers.ModelSerializer):
     class Meta:
         model = Payout
         fields = ["id", "amount_paise", "status", "created_at", "updated_at"]
+
+
+class CreatePayoutRequestSerializer(serializers.Serializer):
+    amount_paise = serializers.IntegerField(min_value=1)
+    bank_account_id = serializers.UUIDField()
+
+
+class PayoutResponseSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Payout
+        fields = ["id", "merchant_id", "bank_account_id", "amount_paise", "status", "created_at"]
