@@ -2,6 +2,8 @@ import os
 import urllib.parse as _urlparse
 from pathlib import Path
 
+from celery.schedules import crontab
+
 BASE_DIR = Path(__file__).resolve().parent.parent.parent
 
 SECRET_KEY = os.environ.get("DJANGO_SECRET_KEY", "dev-secret-key-not-for-prod")
@@ -57,5 +59,16 @@ CELERY_ACCEPT_CONTENT = ["json"]
 CELERY_TIMEZONE = "UTC"
 CELERY_TASK_ACKS_LATE = True
 CELERY_TASK_REJECT_ON_WORKER_LOST = True
+CELERY_TASK_TIME_LIMIT = 30
+CELERY_BEAT_SCHEDULE = {
+    "sweep-stale": {
+        "task": "apps.payouts.tasks.sweep_stale.sweep_stale",
+        "schedule": 10.0,
+    },
+    "expire-idempotency": {
+        "task": "apps.payouts.tasks.expire_idempotency.expire_idempotency",
+        "schedule": crontab(hour=3, minute=0),
+    },
+}
 
 CORS_ALLOWED_ORIGINS = os.environ.get("CORS_ALLOWED_ORIGINS", "http://localhost:5173").split(",")
