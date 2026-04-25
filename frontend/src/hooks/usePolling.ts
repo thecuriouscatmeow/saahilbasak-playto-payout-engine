@@ -1,9 +1,11 @@
-import { useEffect, useRef } from 'react'
+import { useEffect, useLayoutEffect, useRef } from 'react'
 import { POLL_INTERVAL_MS } from '../utils/constants'
 
 export function usePolling(fn: () => void, intervalMs = POLL_INTERVAL_MS) {
   const fnRef = useRef(fn)
-  fnRef.current = fn
+  useLayoutEffect(() => {
+    fnRef.current = fn
+  })
 
   useEffect(() => {
     const tick = () => {

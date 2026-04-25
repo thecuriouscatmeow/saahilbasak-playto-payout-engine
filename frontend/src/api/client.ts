@@ -1,11 +1,13 @@
 import type { ApiErrorBody } from './types'
 
 export class ApiError extends Error {
-  constructor(
-    public status: number,
-    public body: ApiErrorBody,
-  ) {
+  status: number
+  body: ApiErrorBody
+
+  constructor(status: number, body: ApiErrorBody) {
     super(`API error ${status}: ${body.error ?? JSON.stringify(body)}`)
+    this.status = status
+    this.body = body
   }
 }
 
