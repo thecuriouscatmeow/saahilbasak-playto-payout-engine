@@ -1,6 +1,7 @@
 import uuid
 import threading
 import pytest
+from unittest.mock import patch
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from django.db import connection
 from apps.merchants.models import Merchant, BankAccount
@@ -24,7 +25,8 @@ def bank_account(merchant):
 
 
 @pytest.mark.django_db(transaction=True)
-def test_concurrency_tier2(merchant, bank_account):
+@patch("apps.payouts.services.process_payout.ProcessPayoutService.execute", return_value="pending")
+def test_concurrency_tier2(mock_execute, merchant, bank_account):
     """₹300 merchant, 10 simultaneous ₹60 requests → exactly 5 succeed, 5 reject."""
     transaction_repo.insert_credit(str(merchant.id), 30_000)  # ₹300
 

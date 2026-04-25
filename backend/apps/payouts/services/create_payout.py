@@ -83,7 +83,11 @@ class CreatePayoutService:
             payout = payout_repo.create_with_hold(merchant, bank_account, self.amount_paise)
 
         from apps.payouts.tasks.payout_tasks import process_payout
-        process_payout.delay(str(payout.id))
+        from observability.correlation import get_correlation_id
+        process_payout.apply_async(
+            args=[str(payout.id)],
+            kwargs={"correlation_id": get_correlation_id()},
+        )
 
         body = {
             "id": str(payout.id),
