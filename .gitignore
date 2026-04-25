@@ -1,0 +1,16 @@
+.worktrees/
+.claude/
+CLAUDE.md
+__pycache__/
+*.pyc
+*.pyo
+.env
+.env.*
+!.env.example
+*.sqlite3
+node_modules/
+dist/
+build/
+.DS_Store
+graphify-out/graph.json
+graphify-out/wiki/
