@@ -11,6 +11,8 @@ from apps.payouts.domain.errors import (
     IdempotencyPayloadMismatch,
 )
 from apps.payouts.domain.money import request_hash as compute_hash
+import structlog
+log = structlog.get_logger()
 
 
 class CreatePayoutService:
@@ -59,6 +61,7 @@ class CreatePayoutService:
             response_status_code=status_code,
             response_body=body,
         )
+        log.info("payout.created", payout_id=body["id"], merchant_id=self.merchant_id, amount_paise=self.amount_paise)
         return status_code, body
 
     def _run_critical_path(self) -> tuple[int, dict]:
@@ -100,11 +103,13 @@ class CreatePayoutService:
 
     def _handle_existing_record(self, record) -> tuple[int, dict]:
         if record.request_hash != self.request_hash:
+            log.warning("idempotency.payload_mismatch", idempotency_key=self.idempotency_key, merchant_id=self.merchant_id)
             raise IdempotencyPayloadMismatch(idempotency_key=self.idempotency_key)
 
         if record.state == IdempotencyState.COMPLETED:
             stored = dict(record.response_body)
             status = stored.pop("_status", 201)
+            log.info("idempotency.replayed", idempotency_key=self.idempotency_key, merchant_id=self.merchant_id)
             return status, stored
 
         for _ in range(5):
@@ -115,6 +120,7 @@ class CreatePayoutService:
                 status = stored.pop("_status", 201)
                 return status, stored
 
+        log.info("idempotency.in_flight", idempotency_key=self.idempotency_key, merchant_id=self.merchant_id)
         return 202, {
             "status": "in_flight",
             "idempotency_key": self.idempotency_key,

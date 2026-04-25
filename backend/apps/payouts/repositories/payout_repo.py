@@ -7,6 +7,8 @@ from apps.payouts.domain.transitions import validate
 from apps.payouts.domain.errors import InvalidStateTransition
 from apps.payouts.repositories import event_repo
 from apps.payouts.repositories import transaction_repo
+import structlog
+log = structlog.get_logger()
 
 
 def create_with_hold(
@@ -45,6 +47,7 @@ def transition(
         raise InvalidStateTransition(frm=frm, to=to)
 
     event_repo.append(payout_id, frm=frm, to=to, reason=reason)
+    log.info(f"payout.{to}", payout_id=payout_id, from_status=str(frm), to_status=str(to), reason=reason)
 
     if on_apply is not None:
         on_apply()
