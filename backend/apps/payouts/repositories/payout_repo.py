@@ -52,11 +52,19 @@ def transition(
     return rows
 
 
-def claim_stale_with_skip_locked(cutoff_dt, max_attempts: int) -> list[Payout]:
-    return list(
-        Payout.objects.select_for_update(skip_locked=True).filter(
-            status=PayoutStatus.PROCESSING,
-            last_attempted_at__lt=cutoff_dt,
-            attempts__lt=max_attempts,
+def claim_stale_with_skip_locked(threshold_seconds: int = 30, limit: int = 100) -> list:
+    from django.db import connection
+    with connection.cursor() as cur:
+        cur.execute(
+            """
+            SELECT id, attempts
+            FROM payouts
+            WHERE status = 'processing'
+              AND last_attempted_at < now() - make_interval(secs => %s)
+            ORDER BY last_attempted_at
+            FOR UPDATE SKIP LOCKED
+            LIMIT %s
+            """,
+            [threshold_seconds, limit],
         )
-    )
+        return cur.fetchall()
