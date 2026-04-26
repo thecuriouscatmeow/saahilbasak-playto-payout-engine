@@ -78,6 +78,8 @@ services:
       context: ./frontend
     ports:
       - "5173:80"
+    environment:
+      API_HOST: web
     depends_on:
       - web
 
