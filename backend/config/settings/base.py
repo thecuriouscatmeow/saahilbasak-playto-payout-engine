@@ -63,11 +63,11 @@ CELERY_TASK_REJECT_ON_WORKER_LOST = True
 CELERY_TASK_TIME_LIMIT = 30
 CELERY_BEAT_SCHEDULE = {
     "sweep-stale": {
-        "task": "apps.payouts.tasks.sweep_stale.sweep_stale",
+        "task": "payouts.sweep_stale",
         "schedule": 10.0,
     },
     "expire-idempotency": {
-        "task": "apps.payouts.tasks.expire_idempotency.expire_idempotency",
+        "task": "payouts.expire_idempotency",
         "schedule": crontab(hour=3, minute=0),
     },
 }
