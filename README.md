@@ -62,7 +62,8 @@ DATABASE_URL=postgresql://postgres:playto@localhost:5432/playto pytest -v
 
 ## Deployed URL
 
-https://playto-payout-engine.up.railway.app
+- **Frontend:** https://frontend-production-a3db.up.railway.app
+- **API:** https://web-production-15d76.up.railway.app
 
 ## Where to read first
 
