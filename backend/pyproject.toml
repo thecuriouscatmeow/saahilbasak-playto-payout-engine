@@ -9,6 +9,7 @@ dependencies = [
     "celery[redis]",
     "structlog",
     "django-cors-headers",
+    "httpx",
 ]
 
 [project.optional-dependencies]

@@ -1,4 +1,3 @@
-import time
 from datetime import timedelta
 from django.db import transaction as db_transaction
 from django.utils import timezone
@@ -45,7 +44,7 @@ class CreatePayoutService:
             return self._handle_existing_record(record)
 
         try:
-            status_code, body = self._run_critical_path()
+            status_code, body = self._run_critical_path(record_id=str(record.id))
         except InsufficientBalance:
             idempotency_repo.update_with_response(
                 record_id=str(record.id),
@@ -64,7 +63,7 @@ class CreatePayoutService:
         log.info("payout.created", payout_id=body["id"], merchant_id=self.merchant_id, amount_paise=self.amount_paise)
         return status_code, body
 
-    def _run_critical_path(self) -> tuple[int, dict]:
+    def _run_critical_path(self, record_id: str) -> tuple[int, dict]:
         with db_transaction.atomic():
             merchant = merchant_repo.lock_for_update(self.merchant_id)
 
@@ -84,6 +83,7 @@ class CreatePayoutService:
                 )
 
             payout = payout_repo.create_with_hold(merchant, bank_account, self.amount_paise)
+            idempotency_repo.attach_payout(record_id, str(payout.id))
 
         from apps.payouts.tasks.payout_tasks import process_payout
         from observability.correlation import get_correlation_id
@@ -112,17 +112,23 @@ class CreatePayoutService:
             log.info("idempotency.replayed", idempotency_key=self.idempotency_key, merchant_id=self.merchant_id)
             return status, stored
 
-        for _ in range(5):
-            time.sleep(0.2)
-            record.refresh_from_db()
-            if record.state == IdempotencyState.COMPLETED:
-                stored = dict(record.response_body)
-                status = stored.pop("_status", 201)
-                return status, stored
+        # Refresh to get latest payout_id (may have been set by now)
+        record.refresh_from_db()
+        if record.payout_id:
+            from apps.payouts.models import Payout
+            payout = Payout.objects.get(id=record.payout_id)
+            return 200, {
+                "id": str(payout.id),
+                "merchant_id": str(payout.merchant_id),
+                "bank_account_id": str(payout.bank_account_id),
+                "amount_paise": payout.amount_paise,
+                "status": payout.status,
+            }
 
+        # payout_id not yet set (microsecond window between record insert and attach_payout)
         log.info("idempotency.in_flight", idempotency_key=self.idempotency_key, merchant_id=self.merchant_id)
         return 202, {
             "status": "in_flight",
             "idempotency_key": self.idempotency_key,
-            "retry_after_ms": 1000,
+            "retry_after_ms": 500,
         }

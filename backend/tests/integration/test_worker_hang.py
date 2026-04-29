@@ -1,4 +1,5 @@
 import pytest
+from unittest.mock import patch, MagicMock
 from apps.merchants.models import Merchant, BankAccount
 from apps.payouts.repositories import transaction_repo
 from apps.payouts.domain.enums import PayoutStatus
@@ -25,10 +26,11 @@ def pending_payout(merchant, bank_account):
 
 
 def test_hang_leaves_processing(pending_payout):
-    svc = ProcessPayoutService(str(pending_payout.id), settlement_seed=0.95)  # ≥ 0.90 → hang
-    result = svc.execute()
+    # Simulate a "pending" outcome: bank simulator fires HTTP but sends no callback
+    with patch("httpx.post", return_value=MagicMock(status_code=200)):
+        result = ProcessPayoutService(str(pending_payout.id)).execute()
 
-    assert result == "hung"
+    assert result == "processing"
     pending_payout.refresh_from_db()
     assert pending_payout.status == PayoutStatus.PROCESSING
     assert pending_payout.attempts == 1

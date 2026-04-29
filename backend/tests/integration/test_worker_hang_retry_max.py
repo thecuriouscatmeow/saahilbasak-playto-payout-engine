@@ -1,5 +1,6 @@
 import pytest
 from datetime import timedelta
+from unittest.mock import patch, MagicMock
 from django.utils import timezone
 from apps.merchants.models import Merchant, BankAccount
 from apps.payouts.models import Payout, Transaction
@@ -38,32 +39,35 @@ def funded_merchant(merchant):
 def test_hang_retry_to_max_then_fail(funded_merchant, bank_account):
     payout = create_with_hold(funded_merchant, bank_account, 20_000)
 
-    # Attempt 1: worker picks up, hang → status=processing, attempts=1
-    result = ProcessPayoutService(str(payout.id), settlement_seed=0.95).execute()
-    assert result == "hung"
+    # Attempt 1: process_payout fires HTTP, payout goes PROCESSING, no webhook comes in
+    with patch("httpx.post", return_value=MagicMock(status_code=200)):
+        result = ProcessPayoutService(str(payout.id)).execute()
+    assert result == "processing"
     payout.refresh_from_db()
     assert payout.status == PayoutStatus.PROCESSING
     assert payout.attempts == 1
 
-    # Sweeper attempt 2: still hang → attempts=2
+    # Sweeper attempt 2: re-fires HTTP, still no webhook
     backdate_payout(payout)
-    swept = RetryStalePayoutsService(threshold_seconds=30, settlement_seed=0.95).execute()
+    with patch("httpx.post", return_value=MagicMock(status_code=200)):
+        swept = RetryStalePayoutsService(threshold_seconds=30).execute()
     assert swept == 1
     payout.refresh_from_db()
     assert payout.status == PayoutStatus.PROCESSING
     assert payout.attempts == 2
 
-    # Sweeper attempt 3: still hang → attempts=3
+    # Sweeper attempt 3: same
     backdate_payout(payout)
-    swept = RetryStalePayoutsService(threshold_seconds=30, settlement_seed=0.95).execute()
+    with patch("httpx.post", return_value=MagicMock(status_code=200)):
+        swept = RetryStalePayoutsService(threshold_seconds=30).execute()
     assert swept == 1
     payout.refresh_from_db()
     assert payout.status == PayoutStatus.PROCESSING
     assert payout.attempts == 3
 
-    # Sweeper attempt 4: attempts >= MAX_ATTEMPTS → forced FAILED + release
+    # Sweeper attempt 4: attempts >= MAX_ATTEMPTS → forced FAILED + release (no HTTP call)
     backdate_payout(payout)
-    swept = RetryStalePayoutsService(threshold_seconds=30, settlement_seed=0.95).execute()
+    swept = RetryStalePayoutsService(threshold_seconds=30).execute()
     assert swept == 1
     payout.refresh_from_db()
     assert payout.status == PayoutStatus.FAILED

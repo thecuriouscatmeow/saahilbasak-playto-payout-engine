@@ -11,12 +11,37 @@ Graded on: ledger correctness under concurrency, idempotency rigor, atomic state
 ```bash
 git clone https://github.com/thecuriouscatmeow/saahilbasak-playto-payout-engine.git
 cd saahilbasak-playto-payout-engine
-cp backend/.env.example backend/.env   # if needed
-make up
+docker compose up --build
 # open http://localhost:5173
 ```
 
-> Requires Docker. `make up` starts postgres, redis, django, celery worker, celery beat, and the React dashboard in one command.
+> Requires Docker. `docker compose up` starts postgres, redis, bank simulator, django, celery worker, celery beat, and the React dashboard in one command.
+
+**Manual startup (two terminals):**
+```bash
+# Terminal 1 — payout engine
+cd backend && source .venv/bin/activate
+DATABASE_URL=postgresql://postgres:playto@localhost:5432/playto python manage.py migrate
+DATABASE_URL=postgresql://postgres:playto@localhost:5432/playto python manage.py seed
+DATABASE_URL=postgresql://postgres:playto@localhost:5432/playto python manage.py runserver
+
+# Terminal 2 — bank simulator
+cd bank_simulator && pip install -r requirements.txt
+ENGINE_WEBHOOK_URL=http://localhost:8000/api/v1/webhooks/bank-callback uvicorn app:app --port 8001 --reload
+```
+
+**Sample curl flow:**
+```bash
+# Create a payout (replace IDs from seed output)
+curl -X POST http://localhost:8000/api/v1/payouts/ \
+  -H "Content-Type: application/json" \
+  -H "X-Merchant-Id: <merchant_id>" \
+  -H "Idempotency-Key: test-1" \
+  -d '{"amount_paise": 5000, "bank_account_id": "<bank_account_id>"}'
+
+# Poll status (~500ms later — webhook drives completion)
+curl http://localhost:8000/api/v1/payouts/<payout_id>/
+```
 
 ## Architecture
 
@@ -29,12 +54,12 @@ make up
 ┌────────────────────▼────────────────────────────────────┐
 │  Django 6 + DRF — port 8000                             │
 │  API layer → Services → Repositories → Domain           │
-└──────┬──────────────────────────────────────┬───────────┘
-       │ SQL (psycopg3)                        │ Celery tasks
-┌──────▼──────┐                    ┌───────────▼───────────┐
-│ PostgreSQL  │                    │ Redis (broker)        │
-│ 16-alpine   │                    │ worker + beat         │
-└─────────────┘                    └───────────────────────┘
+└──────┬──────────────────────────┬────────────┬──────────┘
+       │ SQL (psycopg3)            │ Celery tasks│ webhooks
+┌──────▼──────┐    ┌──────────────▼──┐    ┌────▼────────────────┐
+│ PostgreSQL  │    │ Redis (broker)  │    │ Bank Simulator      │
+│ 16-alpine   │    │ worker + beat   │    │ FastAPI — port 8001 │
+└─────────────┘    └─────────────────┘    └─────────────────────┘
 ```
 
 Four backend layers:

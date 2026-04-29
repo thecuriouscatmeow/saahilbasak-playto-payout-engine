@@ -2,14 +2,23 @@ import threading
 import uuid
 import pytest
 from datetime import timedelta
+from unittest.mock import patch, MagicMock
 from django.utils import timezone
 from django.db import connection
+from rest_framework.test import APIRequestFactory
 from apps.merchants.models import Merchant, BankAccount
 from apps.payouts.models import Payout, PayoutEvent, Transaction
 from apps.payouts.repositories import transaction_repo, merchant_repo
 from apps.payouts.domain.enums import PayoutStatus, TxnType
 from apps.payouts.services.retry_stale import RetryStalePayoutsService
 from apps.payouts.repositories.payout_repo import create_with_hold
+from apps.payouts.api.webhook import BankCallbackView
+
+
+def _fire_webhook(payout_id: str, outcome: str) -> None:
+    factory = APIRequestFactory()
+    request = factory.post("/", {"payout_id": payout_id, "outcome": outcome}, format="json")
+    BankCallbackView.as_view()(request)
 
 
 def make_stale_processing_payout(merchant, bank_account, attempts=0, seconds_ago=60):
@@ -61,8 +70,10 @@ def test_sweeper_fails_at_max_attempts(funded_merchant, bank_account):
 
 def test_sweeper_retries_and_fails(funded_merchant, bank_account):
     payout = make_stale_processing_payout(funded_merchant, bank_account, attempts=2)
-    svc = RetryStalePayoutsService(threshold_seconds=30, settlement_seed=0.85)  # → fail
-    svc.execute()
+    with patch("httpx.post", return_value=MagicMock(status_code=200)):
+        RetryStalePayoutsService(threshold_seconds=30).execute()
+    # Sweeper re-fired HTTP; simulate bank callback arriving with failure
+    _fire_webhook(str(payout.id), "failure")
 
     payout.refresh_from_db()
     assert payout.status == PayoutStatus.FAILED
@@ -71,8 +82,10 @@ def test_sweeper_retries_and_fails(funded_merchant, bank_account):
 
 def test_sweeper_retries_and_succeeds(funded_merchant, bank_account):
     payout = make_stale_processing_payout(funded_merchant, bank_account, attempts=1)
-    svc = RetryStalePayoutsService(threshold_seconds=30, settlement_seed=0.5)  # → success
-    svc.execute()
+    with patch("httpx.post", return_value=MagicMock(status_code=200)):
+        RetryStalePayoutsService(threshold_seconds=30).execute()
+    # Sweeper re-fired HTTP; simulate bank callback arriving with success
+    _fire_webhook(str(payout.id), "success")
 
     payout.refresh_from_db()
     assert payout.status == PayoutStatus.COMPLETED

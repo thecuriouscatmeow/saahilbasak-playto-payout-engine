@@ -1,9 +1,12 @@
 import pytest
+from unittest.mock import patch, MagicMock
+from rest_framework.test import APIRequestFactory
 from apps.merchants.models import Merchant, BankAccount
 from apps.payouts.models import Payout, Transaction
 from apps.payouts.repositories import transaction_repo, merchant_repo
 from apps.payouts.domain.enums import PayoutStatus, TxnType
 from apps.payouts.services.process_payout import ProcessPayoutService
+from apps.payouts.api.webhook import BankCallbackView
 
 
 @pytest.fixture
@@ -26,13 +29,25 @@ def pending_payout(merchant, bank_account):
 
 
 def test_success_path(pending_payout, merchant):
-    svc = ProcessPayoutService(str(pending_payout.id), settlement_seed=0.5)  # < 0.70 → success
-    result = svc.execute()
+    with patch("httpx.post") as mock_post:
+        mock_post.return_value = MagicMock(status_code=200)
+        svc = ProcessPayoutService(str(pending_payout.id))
+        result = svc.execute()
 
-    assert result == "completed"
+    assert result == "processing"
+    pending_payout.refresh_from_db()
+    assert pending_payout.status == PayoutStatus.PROCESSING
+
+    # Simulate webhook callback driving completion
+    factory = APIRequestFactory()
+    request = factory.post(
+        "/", {"payout_id": str(pending_payout.id), "outcome": "success"}, format="json"
+    )
+    response = BankCallbackView.as_view()(request)
+    assert response.status_code == 200
+
     pending_payout.refresh_from_db()
     assert pending_payout.status == PayoutStatus.COMPLETED
-
     assert Transaction.objects.filter(type=TxnType.DEBIT).count() == 1
     balance = merchant_repo.get_balance_breakdown(str(merchant.id))
     # credit=50k, hold=20k, debit=20k → available = 50k - 20k + 0 - 20k = 10k
@@ -41,7 +56,8 @@ def test_success_path(pending_payout, merchant):
 
 
 def test_already_handled_is_noop(pending_payout):
-    ProcessPayoutService(str(pending_payout.id), settlement_seed=0.5).execute()
-    result = ProcessPayoutService(str(pending_payout.id), settlement_seed=0.5).execute()
+    with patch("httpx.post", return_value=MagicMock(status_code=200)):
+        ProcessPayoutService(str(pending_payout.id)).execute()
+        result = ProcessPayoutService(str(pending_payout.id)).execute()
     assert result == "already_handled"
     assert Payout.objects.count() == 1

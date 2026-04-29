@@ -28,10 +28,11 @@ def funded_merchant(merchant):
 
 def test_in_flight_second_request_returns_202_or_stored(funded_merchant, bank_account):
     """
-    When a record is IN_FLIGHT (inserted but not completed), a second request
-    with the same key should either get 202 (still in flight after polling) or
-    the completed response if it completes during the poll window.
-    We simulate IN_FLIGHT by inserting the record directly and NOT completing it.
+    Microsecond-window path: record is IN_FLIGHT with no payout_id yet attached.
+    A duplicate request must return 202 immediately (no sleep loop) because
+    attach_payout() has not run yet. This tests the narrow window between
+    insert_or_get_by_key() and the atomic attach_payout() call inside
+    _run_critical_path().
     """
     from datetime import timedelta
     from django.utils import timezone
@@ -59,7 +60,49 @@ def test_in_flight_second_request_returns_202_or_stored(funded_merchant, bank_ac
     )
     status, resp_body = svc.execute()
 
-    # Should get 202 (record still in_flight after poll exhaustion)
+    # Should get 202 immediately — payout_id not yet attached (microsecond window)
     assert status == 202
     assert resp_body["status"] == "in_flight"
     assert "retry_after_ms" in resp_body
+
+
+def test_in_flight_with_payout_attached_returns_live_state(funded_merchant, bank_account):
+    """
+    When a duplicate IN_FLIGHT request arrives and attach_payout() has already
+    run (payout_id is set on the record), the service must return the live Payout
+    state (HTTP 200) instead of sleeping or returning 202.
+    """
+    from datetime import timedelta
+    from django.utils import timezone
+    from apps.payouts.repositories import idempotency_repo, payout_repo
+
+    key = str(uuid.uuid4())
+    body = {"amount_paise": 7_500, "bank_account_id": str(bank_account.id)}
+    h = __import__("apps.payouts.domain.money", fromlist=["request_hash"]).request_hash(body)
+
+    # Insert IN_FLIGHT record manually
+    record, _ = idempotency_repo.insert_or_get_by_key(
+        merchant_id=str(funded_merchant.id),
+        key=key,
+        request_hash=h,
+        expires_at=timezone.now() + timedelta(hours=1),
+    )
+
+    # Create a real Payout and attach it to the idempotency record
+    # (simulates attach_payout() having run inside _run_critical_path)
+    payout = payout_repo.create_with_hold(funded_merchant, bank_account, 7_500)
+    idempotency_repo.attach_payout(str(record.id), str(payout.id))
+
+    svc = CreatePayoutService(
+        merchant_id=str(funded_merchant.id),
+        amount_paise=7_500,
+        bank_account_id=str(bank_account.id),
+        idempotency_key=key,
+        raw_body=body,
+    )
+    status, resp_body = svc.execute()
+
+    assert status == 200
+    assert resp_body["id"] == str(payout.id)
+    assert resp_body["status"] == payout.status
+    assert resp_body["amount_paise"] == 7_500

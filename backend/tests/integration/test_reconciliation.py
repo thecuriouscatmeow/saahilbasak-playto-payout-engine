@@ -1,4 +1,6 @@
 import pytest
+from unittest.mock import patch, MagicMock
+from rest_framework.test import APIRequestFactory
 from apps.merchants.models import Merchant, BankAccount
 from apps.payouts.models import Payout, Transaction
 from apps.payouts.repositories import transaction_repo
@@ -6,6 +8,13 @@ from apps.payouts.domain.enums import PayoutStatus, TxnType
 from apps.payouts.services.reconcile_ledger import ReconcileLedgerService
 from apps.payouts.services.process_payout import ProcessPayoutService
 from apps.payouts.repositories.payout_repo import create_with_hold
+from apps.payouts.api.webhook import BankCallbackView
+
+
+def _fire_webhook(payout_id: str, outcome: str) -> None:
+    factory = APIRequestFactory()
+    request = factory.post("/", {"payout_id": payout_id, "outcome": outcome}, format="json")
+    BankCallbackView.as_view()(request)
 
 
 @pytest.fixture
@@ -28,7 +37,9 @@ def funded_merchant(merchant):
 
 def test_reconcile_clean_after_completed_payout(funded_merchant, bank_account):
     payout = create_with_hold(funded_merchant, bank_account, 20_000)
-    ProcessPayoutService(str(payout.id), settlement_seed=0.5).execute()  # success
+    with patch("httpx.post", return_value=MagicMock(status_code=200)):
+        ProcessPayoutService(str(payout.id)).execute()
+    _fire_webhook(str(payout.id), "success")
 
     report = ReconcileLedgerService().execute()
     assert report.is_clean(), f"Expected clean, got drifts: {report.drifts}"
@@ -36,7 +47,9 @@ def test_reconcile_clean_after_completed_payout(funded_merchant, bank_account):
 
 def test_reconcile_clean_after_failed_payout(funded_merchant, bank_account):
     payout = create_with_hold(funded_merchant, bank_account, 20_000)
-    ProcessPayoutService(str(payout.id), settlement_seed=0.85).execute()  # fail
+    with patch("httpx.post", return_value=MagicMock(status_code=200)):
+        ProcessPayoutService(str(payout.id)).execute()
+    _fire_webhook(str(payout.id), "failure")
 
     report = ReconcileLedgerService().execute()
     assert report.is_clean(), f"Expected clean, got drifts: {report.drifts}"
@@ -45,7 +58,9 @@ def test_reconcile_clean_after_failed_payout(funded_merchant, bank_account):
 def test_reconcile_detects_orphan_release(funded_merchant, bank_account):
     """Inject a spurious release on a completed payout → drift detected."""
     payout = create_with_hold(funded_merchant, bank_account, 20_000)
-    ProcessPayoutService(str(payout.id), settlement_seed=0.5).execute()  # completed
+    with patch("httpx.post", return_value=MagicMock(status_code=200)):
+        ProcessPayoutService(str(payout.id)).execute()
+    _fire_webhook(str(payout.id), "success")  # completed
 
     # Inject an extra release (simulates a bug)
     Transaction.objects.create(

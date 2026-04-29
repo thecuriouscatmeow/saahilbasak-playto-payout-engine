@@ -11,4 +11,5 @@ urlpatterns = [
     path("api/v1/merchants/", include("apps.merchants.api.urls")),
     path("api/v1/merchants/", include("apps.payouts.api.urls")),
     path("api/v1/payouts/", include("apps.payouts.api.payout_urls")),
+    path("api/v1/webhooks/", include("apps.payouts.api.webhook_urls")),
 ]

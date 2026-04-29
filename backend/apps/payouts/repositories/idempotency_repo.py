@@ -46,6 +46,11 @@ def update_with_response(
     )
 
 
+def attach_payout(record_id: str, payout_id: str) -> None:
+    """Set payout FK on IN_FLIGHT record so duplicates can return live state."""
+    IdempotencyRecord.objects.filter(id=record_id).update(payout_id=payout_id)
+
+
 def purge_expired() -> int:
     deleted, _ = IdempotencyRecord.objects.filter(expires_at__lt=timezone.now()).delete()
     return deleted

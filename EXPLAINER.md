@@ -187,21 +187,19 @@ The `failed → completed` path is structurally unreachable in two independent w
 
 ## 6. Atomic Refund
 
-When a payout fails — whether during initial processing or a sweeper retry — the balance release and the status update must commit together or not at all. This is enforced by the `on_apply` callback pattern.
+When a payout fails — whether during initial processing or a sweeper retry — the balance release and the status update must commit together or not at all. This is enforced by the `on_apply` callback pattern in the webhook handler:
 
 ```python
-        # outcome == "fail"
-        with db_transaction.atomic():
-            payout_repo.transition(
-                self.payout_id,
-                frm=PayoutStatus.PROCESSING,
-                to=PayoutStatus.FAILED,
-                on_apply=lambda: transaction_repo.insert_release(payout, payout.amount_paise),
-                reason="bank_failed",
-            )
+payout_repo.transition(
+    str(payout.id),
+    frm=PayoutStatus.PROCESSING,
+    to=PayoutStatus.FAILED,
+    on_apply=lambda: transaction_repo.insert_release(payout, payout.amount_paise),
+    reason="bank_failed",
+)
 ```
 
-The `on_apply` lambda is called inside `transition()` after the UPDATE succeeds but before `atomic()` commits. If `insert_release()` raises — say, a database error or a constraint violation — the exception propagates out, `atomic()` rolls back, and the UPDATE to FAILED is undone. The payout stays in PROCESSING. Conversely, if the UPDATE fails (`rows == 0`), `on_apply` is never called, so the release INSERT never runs. State and money always move together: there is no code path that marks a payout FAILED without inserting a corresponding release, and no path that inserts a release without marking the payout FAILED. The same invariant holds in `RetryStalePayoutsService._handle_stale()` when the sweeper exhausts `MAX_ATTEMPTS`.
+The `on_apply` lambda is called inside `transition()` after the UPDATE succeeds but before `atomic()` commits. If `insert_release()` raises, `atomic()` rolls back and the UPDATE to FAILED is undone — the payout stays in PROCESSING. Conversely, if the UPDATE fails (`rows == 0`), `on_apply` is never called, so the release INSERT never runs. State and money always move together. The same invariant holds in `RetryStalePayoutsService._handle_stale_db()` when the sweeper exhausts `MAX_ATTEMPTS`.
 
 ## 7. Failure Recovery
 
@@ -226,15 +224,17 @@ def claim_stale_with_skip_locked(threshold_seconds: int = 30, limit: int = 100) 
         return cur.fetchall()
 ```
 
+The sweeper separates DB work from network I/O: all row locks and `attempts` increments happen inside one `atomic()` block, then HTTP calls to the bank simulator are fired after the transaction commits. This avoids holding PostgreSQL row locks during network round-trips.
+
 There are four failure scenarios this covers:
 
-**Crash-after-mark**: A Celery worker picked up the payout, set it to PROCESSING via `transition(..., increment_attempt=True)`, then the process died before calling the bank. The payout is now stuck in PROCESSING with `last_attempted_at` in the past. After `threshold_seconds` the sweeper claims it and retries inline.
+**Crash-after-mark**: A Celery worker picked up the payout, set it to PROCESSING, then the process died before reaching the bank simulator. The payout is stuck in PROCESSING with `last_attempted_at` in the past. After `threshold_seconds` the sweeper claims it and re-fires the HTTP call to the simulator.
 
-**Duplicate delivery**: Celery can deliver a task more than once. `ProcessPayoutService.execute()` checks `if payout.status != PayoutStatus.PENDING: return "already_handled"` as its first line. If a sweeper or a second task delivery finds the payout already in PROCESSING or COMPLETED, it returns immediately without touching the ledger.
+**Duplicate delivery**: Celery can deliver a task more than once. `ProcessPayoutService.execute()` checks `if payout.status != PayoutStatus.PENDING: return "already_handled"` as its first line. A second delivery finds the payout in PROCESSING and returns immediately.
 
-**Bank hang**: `simulate_bank_settlement()` can return `"hung"` (10% probability), representing a bank API that accepted the request but gave no definitive answer. The worker returns `"hung"` and leaves the payout in PROCESSING. On the next sweeper cycle, `last_attempted_at` will be old enough to be picked up again for an inline retry.
+**Bank no-callback (pending)**: The bank simulator fires no callback for the 10% "pending" outcome. The payout stays in PROCESSING until the sweeper picks it up and re-fires the HTTP call. The simulator may then respond with a success or failure callback, driving completion.
 
-**Max attempts**: If `attempts >= MAX_ATTEMPTS` (3), the sweeper atomically transitions to FAILED and calls `transaction_repo.insert_release()` via the same `on_apply` pattern described in section 6. The merchant's held funds are returned to available balance, and no further retries occur.
+**Max attempts**: If `attempts >= MAX_ATTEMPTS` (3), the sweeper atomically transitions to FAILED and calls `transaction_repo.insert_release()` — no further HTTP calls are made. The merchant's held funds return to available balance.
 
 ## 8. Observability
 
@@ -284,3 +284,24 @@ if merchant.balance >= amount:
 **Why it's wrong:** There is no `balance` column — balance is derived from the transaction ledger. More critically, this pattern has a classic TOCTOU (time-of-check / time-of-update) race: two concurrent requests both read `balance = 100`, both see it as sufficient for `60`, both proceed, and the balance goes to `-20` after both `.save()` calls. The ORM `save()` issues `UPDATE merchants SET balance = <new_value>` with no WHERE guard on the old value. No lock, no atomicity, and the ledger-append model is completely bypassed.
 
 **What replaced it:** `SELECT FOR UPDATE` on the Merchant row inside `transaction.atomic()`, followed by `get_balance_breakdown()` which does a single conditional-aggregate SQL query over the transactions table. The lock serializes concurrent requests at the database level; the balance check and hold insert (`create_with_hold`) happen inside the same atomic block so no other transaction can observe the pre-hold state. The balance is never stored — it is always derived — so there is no stale column to read, no mutable field to race on, and the full history of every balance movement is preserved in the append-only transactions log.
+
+## 10. AI Suggestion That Became an Architecture Upgrade
+
+A second real example — this one where the critique was partially right but pointed at the wrong fix.
+
+**The AI-flagged problem:** During a review pass, an AI flagged `time.sleep(0.2)` in `CreatePayoutService._handle_existing_record()` as a code smell. The loop polled for an idempotency record to flip from IN_FLIGHT to COMPLETED five times with 200ms waits, adding up to a 1-second latency spike on any duplicate idempotency-key request.
+
+**Why the critique was partially right:** The sleep loop was genuinely broken. In the original design it worked because `simulate_bank_settlement()` — an in-process coin flip — completed synchronously inside the same Celery task. So by the time a duplicate HTTP request arrived, the record was often already COMPLETED. With an async webhook architecture the assumption no longer holds: the payout stays in PROCESSING until the bank's callback arrives, potentially seconds later. The sleep loop would always exhaust and return 202.
+
+**Why patching the sleep loop was the wrong fix:** The sleep was an artifact of a deeper architectural flaw — the bank settlement provider lived inside the same Python process as the payout engine. `simulate_bank_settlement()` was called inline, outcomes were handled synchronously, and the "bank" was a random number generator. There was no real I/O boundary: no network call, no callback, no timeout handling, no partial-failure surface.
+
+**What replaced it:** A separate `bank_simulator/` FastAPI service with a real HTTP boundary.
+
+- `ProcessPayoutService` makes an `httpx.post()` to `POST /settle` and returns immediately. The bank simulator rolls an outcome and fires a `POST /api/v1/webhooks/bank-callback` callback after a random 100–400ms delay. For the 10% "pending" case it fires no callback — the sweeper re-fires the HTTP call on retry.
+- The webhook handler (`BankCallbackView`) receives the callback, looks up the payout, and calls `payout_repo.transition()` with the appropriate `on_apply` ledger operation. The same atomic guarantee that existed in the old inline path is preserved — the status flip and the ledger insert commit together.
+- The idempotency duplicate path no longer needs to poll at all. The `payout_id` FK is stamped onto the `IdempotencyRecord` inside the atomic block that creates the payout (via `idempotency_repo.attach_payout()`). A duplicate request refreshes the record, finds the `payout_id`, fetches the live `Payout`, and returns its current state immediately with no sleeping.
+- The sweeper separates DB locking from HTTP I/O: row locks are acquired and attempts are bumped inside a transaction, then the transaction commits before HTTP calls are fired. This prevents holding PostgreSQL row locks during network round-trips — a subtle concurrency issue the original design avoided only because settlement was in-process.
+
+The sleep loop disappeared as a side effect. The more durable outcome was an architecture that mirrors how a real payout provider integration works: HTTP call, async callback, no-callback as the 10% hang case, sweeper-driven retry, and a webhook endpoint that is genuinely idempotent on re-delivery.
+
+**Scope note:** The webhook endpoint does not verify an HMAC signature. In production this would be a signed callback (the provider shares a secret; the engine verifies `HMAC-SHA256(body, secret) == X-Signature header`). This is intentionally omitted — the goal here was to demonstrate correct event-driven ledger behaviour under async outcomes, not to implement cryptographic ceremony on a local in-compose service.
