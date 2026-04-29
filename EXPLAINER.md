@@ -270,77 +270,44 @@ def configure_logging() -> None:
 
 ## 9. AI Audit
 
-Three real examples where AI-generated code was wrong and what replaced it — one from the initial scaffold phase, two caught during a post-implementation Codex review of the webhook feature.
+One real example where AI-generated code was wrong and what replaced it.
 
----
-
-### Example 1 — Mutable balance column (scaffold phase)
-
-**Wrong suggestion:** When asked to implement balance checking, an AI suggested:
+**Wrong suggestion:** When asked to implement worker-side bank settlement, an AI generated:
 
 ```python
-merchant = Merchant.objects.get(id=merchant_id)
-if merchant.balance >= amount:
-    merchant.balance -= amount
-    merchant.save()
+def simulate_bank_settlement(seed: float | None = None) -> str:
+    r = seed if seed is not None else random.random()
+    if r < 0.70:
+        return "success"
+    if r < 0.90:
+        return "fail"
+    return "hang"
+
+class ProcessPayoutService:
+    def execute(self) -> str:
+        ...
+        outcome = simulate_bank_settlement(self.settlement_seed)
+        if outcome == "hang":
+            return "hung"
+        if outcome == "success":
+            with db_transaction.atomic():
+                payout_repo.transition(... to=COMPLETED, on_apply=insert_debit ...)
+            return "completed"
+        # fail
+        with db_transaction.atomic():
+            payout_repo.transition(... to=FAILED, on_apply=insert_release ...)
+        return "failed"
 ```
 
-**Why it's wrong:** There is no `balance` column — balance is derived from the transaction ledger. More critically, this pattern has a classic TOCTOU (time-of-check / time-of-update) race: two concurrent requests both read `balance = 100`, both see it as sufficient for `60`, both proceed, and the balance goes to `-20` after both `.save()` calls. The ORM `save()` issues `UPDATE merchants SET balance = <new_value>` with no WHERE guard on the old value. No lock, no atomicity, and the ledger-append model is completely bypassed.
+**Why it's wrong:** The "bank" is a random number generator running inside the same Python process as the payout engine. Three concrete problems:
 
-**What replaced it:** `SELECT FOR UPDATE` on the Merchant row inside `transaction.atomic()`, followed by `get_balance_breakdown()` which does a single conditional-aggregate SQL query over the transactions table. The lock serializes concurrent requests at the database level; the balance check and hold insert (`create_with_hold`) happen inside the same atomic block so no other transaction can observe the pre-hold state. The balance is never stored — it is always derived — so there is no stale column to read, no mutable field to race on, and the full history of every balance movement is preserved in the append-only transactions log.
+1. **No real I/O boundary.** There is no network call, no timeout surface, no partial-failure mode. The code cannot demonstrate how the system behaves when a real provider is slow, unreachable, or sends an ambiguous response — all the scenarios that matter in production.
 
----
+2. **The 10% "hang" outcome is semantically wrong.** Returning `"hung"` and leaving the payout in PROCESSING models a worker that gave up, not a bank that accepted the request but sent no definitive response. The distinction matters for retry semantics: a real provider that hangs should be retried by re-firing the HTTP call, not by an inline coin-flip on the next sweeper cycle.
 
-### Example 2 — `httpx` missing from backend runtime dependencies (webhook feature)
+3. **It makes the idempotency sleep loop load-bearing.** `CreatePayoutService._handle_existing_record()` polls `time.sleep(0.2) × 5` waiting for a duplicate-key record to flip from IN_FLIGHT to COMPLETED. This works only because `simulate_bank_settlement()` is synchronous — by the time a second HTTP request arrives, the worker has already run and the payout is COMPLETED. With any real async provider the polling loop always exhausts and returns 202.
 
-When implementing `ProcessPayoutService` and `RetryStalePayoutsService` to fire HTTP calls to the bank simulator, the AI wrote:
-
-```python
-# backend/apps/payouts/services/process_payout.py
-import httpx
-from django.conf import settings
-...
-httpx.post(settings.BANK_SIMULATOR_URL + "/settle", json={...}, timeout=5.0)
-```
-
-But `backend/Dockerfile` still listed only:
-
-```dockerfile
-RUN pip install Django djangorestframework "psycopg[binary]" "celery[redis]" \
-    structlog django-cors-headers gunicorn
-```
-
-`httpx` was never installed. The import would succeed locally (where `httpx` happened to be present in the dev venv), but the production Docker image would crash at worker startup — before any payout task could run — because `apps.payouts.tasks.payout_tasks` imports `ProcessPayoutService` which imports `httpx`.
-
-**What went wrong:** The AI wrote the import and the HTTP call correctly but didn't propagate the new dependency to `Dockerfile` or `pyproject.toml`. The gap is invisible in local testing when the package is already installed.
-
-**What fixed it:** Added `httpx` explicitly to both `backend/Dockerfile` (pip install line) and `backend/pyproject.toml` (dependencies list). Verified by rebuilding the Docker image from scratch before deploying.
-
----
-
-### Example 3 — Missing trailing slash on webhook callback URL (webhook feature)
-
-When wiring `ENGINE_WEBHOOK_URL`, the AI set:
-
-```python
-# backend/config/settings/base.py
-ENGINE_WEBHOOK_URL = os.environ.get(
-    "ENGINE_WEBHOOK_URL",
-    "http://backend:8000/api/v1/webhooks/bank-callback"   # ← no trailing slash
-)
-```
-
-And in `docker-compose.yml`:
-
-```yaml
-ENGINE_WEBHOOK_URL: http://web:8000/api/v1/webhooks/bank-callback   # ← no trailing slash
-```
-
-The Django URL route is registered as `bank-callback/` (with slash). Django's `CommonMiddleware` has `APPEND_SLASH=True` by default: a request to `/bank-callback` gets a `301 Moved Permanently` redirect to `/bank-callback/`. The bank simulator fires callbacks with `httpx.post()`, which does **not** follow redirects by default (`follow_redirects=False`). So every success and failure callback would receive a 301 and stop — never reaching `BankCallbackView.post()`. Payouts would stay in PROCESSING indefinitely until the sweeper exhausted `MAX_ATTEMPTS` and force-failed them.
-
-The bug is silent: the bank simulator returns 200 (it fires the callback and doesn't wait for the response), `process_payout.py` returns `"processing"` successfully, and everything looks fine until you notice payouts never complete.
-
-**What fixed it:** Added trailing slashes to `ENGINE_WEBHOOK_URL` in `settings/base.py`, `docker-compose.yml`, and the Railway environment variables for both `web` and `worker` services. Also fixed the URL constant in `test_webhook_callback.py` which triggered the same 301 in tests.
+**What replaced it:** An HTTP call to an external bank simulator service with an async webhook callback (see §10). `ProcessPayoutService` fires `httpx.post(/settle)` and returns immediately. The bank simulator rolls an outcome, waits 100–400ms, and fires `POST /api/v1/webhooks/bank-callback/` back to the engine. `BankCallbackView` then calls `payout_repo.transition()` with the appropriate `on_apply` ledger operation — the same atomic guarantee as the original inline path, now driven by an external event. For the 10% "pending" outcome, the simulator fires no callback; the sweeper re-fires the HTTP call after the threshold, correctly modelling a provider that accepted the request but went silent.
 
 ## 10. AI Suggestion That Became an Architecture Upgrade
 
