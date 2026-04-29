@@ -23,9 +23,10 @@
 - **Sub-7** — Docker + Railway Deploy + EXPLAINER
 - **Merge** `b65677d` — feature/payout-engine → main; 87 tests passing
 - **Deploy fixes** `eabd2c2` `e5a882e` `c43b6f7` — Railway prod live
+- **Bank simulator + webhook** `aa04a93` `06cf2e9` — 93 tests; async callback architecture; Railway deployed 2026-04-29
 
 ## Active Issues
 None.
 
 ## Sync Footer
-Synced: 2026-04-26 | Commit: c43b6f7
+Synced: 2026-04-29 | Commit: 06cf2e9
