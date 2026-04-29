@@ -13,6 +13,4 @@ export const createPayout = (data: CreatePayoutRequest) =>
   })
 
 export const listPayouts = (merchantId: string) =>
-  fetchJson<PaginatedResponse<Payout>>(`/api/v1/payouts/list/`, {
-    headers: { 'X-Merchant-Id': merchantId },
-  })
+  fetchJson<PaginatedResponse<Payout>>(`/api/v1/payouts/list/`)

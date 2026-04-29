@@ -1,9 +1,17 @@
+import { useEffect } from 'react'
 import { TableShell } from '../components/TableShell'
 import { TransactionRow } from '../components/TransactionRow'
 import { useTransactions } from '../hooks/useTransactions'
 
-export function TransactionLedger({ merchantId }: { merchantId: string }) {
-  const { transactions, error } = useTransactions(merchantId)
+interface Props {
+  merchantId: string
+  onRefetchReady?: (fn: () => void) => void
+}
+
+export function TransactionLedger({ merchantId, onRefetchReady }: Props) {
+  const { transactions, error, refetch } = useTransactions(merchantId)
+
+  useEffect(() => { onRefetchReady?.(refetch) }, [refetch, onRefetchReady])
 
   return (
     <div>

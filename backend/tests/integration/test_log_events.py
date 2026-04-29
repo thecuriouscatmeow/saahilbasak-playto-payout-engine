@@ -31,7 +31,7 @@ def test_payout_created_log_emitted(funded_merchant, bank_account, capsys):
         "/api/v1/payouts/",
         {"amount_paise": 10_000, "bank_account_id": str(bank_account.id)},
         format="json",
-        HTTP_X_MERCHANT_ID=str(funded_merchant.id),
+        HTTP_AUTHORIZATION=f"Bearer {funded_merchant.api_key}",
         HTTP_IDEMPOTENCY_KEY=key,
     )
     out = capsys.readouterr().out

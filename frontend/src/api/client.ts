@@ -11,10 +11,15 @@ export class ApiError extends Error {
   }
 }
 
-let merchantIdGetter: () => string = () => ''
+let merchantApiKeyGetter: () => string = () => ''
 
-export function setMerchantIdGetter(fn: () => string) {
-  merchantIdGetter = fn
+export function setMerchantApiKeyGetter(fn: () => string) {
+  merchantApiKeyGetter = fn
+}
+
+/** @deprecated use setMerchantApiKeyGetter */
+export function setMerchantIdGetter(_fn: () => string) {
+  // no-op: merchant identity is now derived from the API key
 }
 
 export async function fetchJson<T>(path: string, init: RequestInit = {}): Promise<T> {
@@ -24,8 +29,8 @@ export async function fetchJson<T>(path: string, init: RequestInit = {}): Promis
     ...(init.headers as Record<string, string> | undefined),
   }
 
-  const mid = merchantIdGetter()
-  if (mid) headers['X-Merchant-Id'] = mid
+  const apiKey = merchantApiKeyGetter()
+  if (apiKey) headers['Authorization'] = `Bearer ${apiKey}`
 
   if (init.method === 'POST' && !headers['Idempotency-Key']) {
     headers['Idempotency-Key'] = crypto.randomUUID()

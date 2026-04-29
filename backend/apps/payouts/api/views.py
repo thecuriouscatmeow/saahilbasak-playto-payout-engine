@@ -2,6 +2,7 @@ from rest_framework.views import APIView
 from rest_framework.generics import ListAPIView, RetrieveAPIView, get_object_or_404
 from rest_framework.response import Response
 from rest_framework.pagination import LimitOffsetPagination
+from apps.payouts.api.authentication import MerchantApiKeyAuthentication
 from apps.payouts.repositories.merchant_repo import get_balance_breakdown
 from apps.payouts.models import Transaction, Payout
 from apps.payouts.services.create_payout import CreatePayoutService
@@ -34,13 +35,17 @@ class TransactionListView(ListAPIView):
 
 
 class PayoutCreateView(APIView):
+    authentication_classes = [MerchantApiKeyAuthentication]
+    permission_classes = []
+
     def post(self, request):
-        merchant_id = request.headers.get("X-Merchant-Id")
+        if request.auth is None:
+            return Response({"error": "Authorization required."}, status=401)
+
+        merchant_id = request.auth  # derived from authenticated API key
         idempotency_key = request.headers.get("Idempotency-Key")
-        if not merchant_id or not idempotency_key:
-            return Response(
-                {"error": "X-Merchant-Id and Idempotency-Key headers required"}, status=400
-            )
+        if not idempotency_key:
+            return Response({"error": "Idempotency-Key header required"}, status=400)
 
         serializer = CreatePayoutRequestSerializer(data=request.data)
         if not serializer.is_valid():
@@ -58,26 +63,37 @@ class PayoutCreateView(APIView):
 
 
 class PayoutListView(ListAPIView):
+    authentication_classes = [MerchantApiKeyAuthentication]
+    permission_classes = []
     serializer_class = PayoutResponseSerializer
     pagination_class = TransactionPagination
 
     def get_queryset(self):
-        merchant_id = self.request.headers.get("X-Merchant-Id")
-        return Payout.objects.filter(merchant_id=merchant_id).order_by("-created_at")
+        if self.request.auth is None:
+            return Payout.objects.none()
+        return Payout.objects.filter(merchant_id=self.request.auth).order_by("-created_at")
 
 
 class PayoutDetailView(RetrieveAPIView):
+    authentication_classes = [MerchantApiKeyAuthentication]
+    permission_classes = []
     serializer_class = PayoutResponseSerializer
     lookup_field = "id"
 
     def get_queryset(self):
-        merchant_id = self.request.headers.get("X-Merchant-Id")
-        return Payout.objects.filter(merchant_id=merchant_id)
+        if self.request.auth is None:
+            return Payout.objects.none()
+        return Payout.objects.filter(merchant_id=self.request.auth)
 
 
 class PayoutEventsView(APIView):
+    authentication_classes = [MerchantApiKeyAuthentication]
+    permission_classes = []
+
     def get(self, request, payout_id):
-        payout = get_object_or_404(Payout, id=payout_id)
+        if request.auth is None:
+            return Response({"error": "Authorization required."}, status=401)
+        payout = get_object_or_404(Payout, id=payout_id, merchant_id=request.auth)
         events = payout.events.order_by("created_at").values(
             "id", "from_status", "to_status", "note", "created_at"
         )

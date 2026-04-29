@@ -5,7 +5,7 @@ from apps.merchants.models import Merchant, BankAccount
 class MerchantSerializer(serializers.ModelSerializer):
     class Meta:
         model = Merchant
-        fields = ["id", "name"]
+        fields = ["id", "name", "api_key"]
 
 
 class BankAccountSerializer(serializers.ModelSerializer):

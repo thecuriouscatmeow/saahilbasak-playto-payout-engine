@@ -34,15 +34,25 @@ class SettleResponse(BaseModel):
     outcome_will_be: str
 
 
+ENGINE_WEBHOOK_SECRET = os.getenv("ENGINE_WEBHOOK_SECRET", "")
+
+
 async def _fire_callback(callback_url: str, payout_id: str, outcome: str) -> None:
     """Delayed background callback to the payout engine webhook."""
     await asyncio.sleep(random.uniform(0.1, 0.4))
-    async with httpx.AsyncClient() as client:
-        await client.post(
-            callback_url,
-            json={"payout_id": payout_id, "outcome": outcome},
-            timeout=10.0,
-        )
+    headers = {}
+    if ENGINE_WEBHOOK_SECRET:
+        headers["Authorization"] = f"Bearer {ENGINE_WEBHOOK_SECRET}"
+    try:
+        async with httpx.AsyncClient() as client:
+            await client.post(
+                callback_url,
+                json={"payout_id": payout_id, "outcome": outcome},
+                headers=headers,
+                timeout=10.0,
+            )
+    except Exception:
+        pass
 
 
 app = FastAPI(title="Bank Simulator", version="1.0.0")

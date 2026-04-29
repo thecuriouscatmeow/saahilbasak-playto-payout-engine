@@ -1,5 +1,15 @@
 # Changelog
 
+## 2026-04-29 — Security hardening: Codex P1/P2 fixes
+
+- **P1 — Merchant identity**: Replaced `X-Merchant-Id` header trust with `Authorization: Bearer <api_key>` scheme. Added `api_key` UUID field to `Merchant` model + migration. New `MerchantApiKeyAuthentication` DRF class derives `merchant_id` server-side. All payout views (`PayoutCreateView`, `PayoutListView`, `PayoutDetailView`, `PayoutEventsView`) now use `request.auth` instead of caller-supplied header. Frontend stores and sends api_key from merchant list response.
+- **P1 — Webhook forgery**: `BankCallbackView` validates `Authorization: Bearer <BANK_WEBHOOK_SECRET>` when env var is set (empty = disabled for dev/test backward compat). Bank simulator sends `ENGINE_WEBHOOK_SECRET` on callbacks.
+- **P2 — Events scope**: `PayoutEventsView` now filters `merchant_id=request.auth` — cross-merchant access returns 404.
+- **P2 — Bank simulator callback failures**: `_fire_callback` wrapped in `try/except` — callback delivery failures are swallowed so `/settle` acceptance is independent of callback delivery. All 5 bank simulator tests now pass (was 3 failures / 2 passes).
+- **P2 — Ledger stale after payout**: `TransactionLedger` gains `onRefetchReady` prop; `App.tsx` calls `refetchTransactions` alongside balance + payouts in `handlePayoutSuccess`.
+- Tests updated: `test_payout_api_contracts.py` and `test_log_events.py` switched from `HTTP_X_MERCHANT_ID` to `HTTP_AUTHORIZATION: Bearer <api_key>`. Bank simulator test 4 rewritten to patch `_fire_callback` directly (avoids ASGI client mock collision).
+- 23 files changed.
+
 ## 2026-04-29 — Bank simulator + webhook architecture (93 tests)
 
 - `18cd5e7` docs: ADRs DEC-001/DEC-002 + EXPLAINER §9 real AI bugs (httpx dep, trailing slash)

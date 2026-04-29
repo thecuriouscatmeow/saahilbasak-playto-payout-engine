@@ -1,3 +1,4 @@
+from django.conf import settings
 from django.db import transaction as db_transaction
 from rest_framework.views import APIView
 from rest_framework.response import Response
@@ -17,6 +18,12 @@ class BankCallbackView(APIView):
     permission_classes = []
 
     def post(self, request):
+        # Validate shared secret when BANK_WEBHOOK_SECRET is configured.
+        secret = getattr(settings, "BANK_WEBHOOK_SECRET", "")
+        if secret:
+            auth = request.headers.get("Authorization", "")
+            if auth != f"Bearer {secret}":
+                return Response({"detail": "Forbidden."}, status=status.HTTP_403_FORBIDDEN)
         payout_id = request.data.get("payout_id")
         outcome = request.data.get("outcome")
 

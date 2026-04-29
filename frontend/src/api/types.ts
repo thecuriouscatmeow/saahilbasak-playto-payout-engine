@@ -1,6 +1,7 @@
 export interface Merchant {
   id: string
   name: string
+  api_key: string
 }
 
 export interface BankAccount {

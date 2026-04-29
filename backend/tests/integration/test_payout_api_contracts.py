@@ -30,7 +30,7 @@ def funded_merchant(merchant):
 
 def headers(merchant, key=None):
     return {
-        "HTTP_X_MERCHANT_ID": str(merchant.id),
+        "HTTP_AUTHORIZATION": f"Bearer {merchant.api_key}",
         "HTTP_IDEMPOTENCY_KEY": key or str(uuid.uuid4()),
     }
 
@@ -52,7 +52,7 @@ def test_create_payout_400_missing_headers(client, funded_merchant, bank_account
         {"amount_paise": 10_000, "bank_account_id": str(bank_account.id)},
         format="json",
     )
-    assert resp.status_code == 400
+    assert resp.status_code == 401
 
 
 def test_create_payout_422_insufficient_balance(client, merchant, bank_account):
@@ -69,7 +69,7 @@ def test_create_payout_422_insufficient_balance(client, merchant, bank_account):
 
 def test_create_payout_409_idempotency_mismatch(client, funded_merchant, bank_account):
     key = str(uuid.uuid4())
-    h = {"HTTP_X_MERCHANT_ID": str(funded_merchant.id), "HTTP_IDEMPOTENCY_KEY": key}
+    h = {"HTTP_AUTHORIZATION": f"Bearer {funded_merchant.api_key}", "HTTP_IDEMPOTENCY_KEY": key}
     client.post(
         "/api/v1/payouts/",
         {"amount_paise": 10_000, "bank_account_id": str(bank_account.id)},
@@ -88,7 +88,7 @@ def test_create_payout_409_idempotency_mismatch(client, funded_merchant, bank_ac
 
 def test_create_payout_replay_201(client, funded_merchant, bank_account):
     key = str(uuid.uuid4())
-    h = {"HTTP_X_MERCHANT_ID": str(funded_merchant.id), "HTTP_IDEMPOTENCY_KEY": key}
+    h = {"HTTP_AUTHORIZATION": f"Bearer {funded_merchant.api_key}", "HTTP_IDEMPOTENCY_KEY": key}
     body = {"amount_paise": 5_000, "bank_account_id": str(bank_account.id)}
     r1 = client.post("/api/v1/payouts/", body, format="json", **h)
     r2 = client.post("/api/v1/payouts/", body, format="json", **h)

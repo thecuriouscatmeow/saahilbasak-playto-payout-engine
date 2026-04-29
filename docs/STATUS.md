@@ -25,8 +25,11 @@
 - **Deploy fixes** `eabd2c2` `e5a882e` `c43b6f7` — Railway prod live
 - **Bank simulator + webhook** `aa04a93` `06cf2e9` — 93 tests; async callback architecture; Railway deployed 2026-04-29
 
+## Completed Phases (continued)
+- **Security hardening** — Codex P1/P2 fixes: merchant api_key auth, webhook secret, events scope, ledger refetch, bank simulator callback resilience. 23 files. Bank simulator: 5/5 tests passing.
+
 ## Active Issues
 None.
 
 ## Sync Footer
-Synced: 2026-04-29 | Commit: 22725cc
+Synced: 2026-04-29 | Commit: 014994c (session work uncommitted)

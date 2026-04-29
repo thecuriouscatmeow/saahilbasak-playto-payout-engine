@@ -2,6 +2,7 @@
 Tests for the bank simulator FastAPI service.
 Run with: pytest test_app.py -v
 """
+import asyncio
 import pytest
 import pytest_anyio
 import app as bank_app
@@ -88,25 +89,23 @@ async def test_settle_pending_no_callback():
 async def test_settle_success_fires_callback():
     bank_app._seed = 0.0  # → success
     try:
-        with patch("httpx.AsyncClient.post", new_callable=AsyncMock) as mock_post:
+        # Patch _fire_callback at the module level so the ASGI test client is
+        # not accidentally mocked by a class-level httpx patch.
+        with patch("app._fire_callback", new_callable=AsyncMock) as mock_cb:
             async with make_client() as client:
                 resp = await client.post("/settle", json=SETTLE_PAYLOAD)
             assert resp.status_code == 200
+            body = resp.json()
+            assert body["outcome_will_be"] == "success"
 
-            # BackgroundTasks run inline in ASGI test transport; give a tiny
-            # moment for the background task to complete if it hasn't yet.
-            import asyncio
+            # BackgroundTasks run inline in the ASGI test transport.
             await asyncio.sleep(0.5)
 
-            mock_post.assert_called_once()
-            call_kwargs = mock_post.call_args
-            # First positional arg is the callback URL
-            called_url = call_kwargs.args[0] if call_kwargs.args else call_kwargs.kwargs.get("url", "")
-            called_json = call_kwargs.kwargs.get("json", {})
-
-            assert called_url == SETTLE_PAYLOAD["callback_url"]
-            assert called_json["payout_id"] == SETTLE_PAYLOAD["payout_id"]
-            assert called_json["outcome"] == "success"
+            mock_cb.assert_called_once_with(
+                SETTLE_PAYLOAD["callback_url"],
+                SETTLE_PAYLOAD["payout_id"],
+                "success",
+            )
     finally:
         bank_app._seed = None
 

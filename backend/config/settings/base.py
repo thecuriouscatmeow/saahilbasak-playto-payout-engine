@@ -73,6 +73,7 @@ CELERY_BEAT_SCHEDULE = {
 }
 
 BANK_SIMULATOR_URL = os.environ.get("BANK_SIMULATOR_URL", "http://bank_simulator:8001")
+BANK_WEBHOOK_SECRET = os.environ.get("BANK_WEBHOOK_SECRET", "")
 ENGINE_WEBHOOK_URL = os.environ.get("ENGINE_WEBHOOK_URL", "http://backend:8000/api/v1/webhooks/bank-callback/")
 
 CORS_ALLOWED_ORIGINS = os.environ.get("CORS_ALLOWED_ORIGINS", "http://localhost:5173").split(",")
