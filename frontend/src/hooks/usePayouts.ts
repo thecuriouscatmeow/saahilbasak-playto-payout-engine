@@ -10,7 +10,7 @@ export function usePayouts(merchantId: string) {
   const fetch = useCallback(() => {
     if (!merchantId) return
     listPayouts(merchantId)
-      .then((r) => setPayouts(r.results))
+      .then((r) => { setPayouts(r.results); setError(null) })
       .catch((e) => setError(e.message))
   }, [merchantId])
 

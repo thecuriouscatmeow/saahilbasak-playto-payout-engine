@@ -1,9 +1,17 @@
+import { useEffect } from 'react'
 import { TableShell } from '../components/TableShell'
 import { PayoutRow } from '../components/PayoutRow'
 import { usePayouts } from '../hooks/usePayouts'
 
-export function PayoutHistorySection({ merchantId }: { merchantId: string }) {
-  const { payouts, error } = usePayouts(merchantId)
+interface Props {
+  merchantId: string
+  onRefetchReady?: (fn: () => void) => void
+}
+
+export function PayoutHistorySection({ merchantId, onRefetchReady }: Props) {
+  const { payouts, error, refetch } = usePayouts(merchantId)
+
+  useEffect(() => { onRefetchReady?.(refetch) }, [refetch, onRefetchReady])
 
   return (
     <div>

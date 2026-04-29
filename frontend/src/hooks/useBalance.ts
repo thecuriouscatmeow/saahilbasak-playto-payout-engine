@@ -10,7 +10,7 @@ export function useBalance(merchantId: string) {
   const fetch = useCallback(() => {
     if (!merchantId) return
     getBalance(merchantId)
-      .then(setBalance)
+      .then((data) => { setBalance(data); setError(null) })
       .catch((e) => setError(e.message))
   }, [merchantId])
 

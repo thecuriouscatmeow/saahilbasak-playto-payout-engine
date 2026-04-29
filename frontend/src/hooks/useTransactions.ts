@@ -9,7 +9,7 @@ export function useTransactions(merchantId: string) {
   const refetch = useCallback(() => {
     if (!merchantId) return
     getTransactions(merchantId)
-      .then((r) => setTransactions(r.results))
+      .then((r) => { setTransactions(r.results); setError(null) })
       .catch((e) => setError(e.message))
   }, [merchantId])
 
